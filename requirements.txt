@@ -1,0 +1,4 @@
+streamlit>=1.50
+pandas>=2.1
+# 선택: AI 문장 다듬기
+# anthropic
