@@ -6,7 +6,7 @@ import re
 import pandas as pd
 import streamlit as st
 
-from core import MEMBERS_CSV, STAGES, actions_for, build_dashboard, load_zones, notice_text
+from core import DEADLINE_RULES, MEMBERS_CSV, STAGES, actions_for, build_dashboard, load_zones, notice_text
 
 st.set_page_config(page_title="재건축 알림이", layout="wide")
 
@@ -42,7 +42,8 @@ zones, members, board = load()
 st.title("재건축 알림이")
 st.caption("정비사업 공공데이터로 주택연금 가입자에게 먼저 알리는 사후관리 서비스 · 시연용 시제품")
 st.info("정비사업 현황은 실제 공공데이터(「인천광역시 미추홀구_정비사업 추진현황」, 2026-07-28 수정)이고, "
-        "**가입자 정보는 모두 가상**입니다. 안내문은 규칙표로 만들며, 실제 도입 시 공사 자체 생성형 AI로 문장을 다듬는 구조입니다.")
+        "**가입자 정보는 모두 가상**입니다. 안내문은 규칙표로 만들며, 실제 도입 시 공사 자체 생성형 AI로 문장을 다듬는 구조입니다. "
+        "전환 기한은 공사 설명서(2026.6.1) 기준이고, 미추홀구는 투기과열지구가 아닌 것으로 계산합니다.")
 
 tab_board, tab_notice, tab_zones, tab_rules = st.tabs(["직원 현황판", "가입자 안내문", "정비사업 현황", "안내 규칙표"])
 
@@ -51,17 +52,17 @@ with tab_board:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("확인한 정비구역", f"{len(zones)}곳")
     c2.metric("구역 안 가입자", f"{len(targets)}명", f"전체 {len(board)}명 중")
-    c3.metric("긴급 (신탁 방식·사업 진행)", f"{(targets['우선순위'] == '긴급').sum()}명")
+    c3.metric("긴급 (신탁·전환 기한 경과 또는 임박)", f"{(targets['우선순위'] == '긴급').sum()}명")
     c4.metric("직원 확인 필요", f"{(targets['우선순위'] == '직원 확인').sum()}명")
 
     pick = st.multiselect("우선순위", ["긴급", "높음", "직원 확인", "보통", "낮음", "대상 아님"],
                           default=["긴급", "높음", "직원 확인", "보통", "낮음"])
     view = board[board["우선순위"].isin(pick)]
     colors = {"긴급": "#f8d7da", "높음": "#fde2c8", "직원 확인": "#fff3c4", "보통": "#e2efda", "낮음": "#eef2f7"}
-    styled = view[["우선순위", "가입자", "구역", "단계", "담보 방식", "다음 조치", "매칭 신뢰도", "매칭 근거", "규정 적용"]].style.map(
+    styled = view[["우선순위", "가입자", "구역", "단계", "담보 방식", "전환 기한", "다음 조치", "매칭 근거"]].style.map(
         lambda v: f"background-color: {colors.get(v, '')}", subset=["우선순위"])
     st.table(styled.hide(axis="index"))
-    st.caption("우선순위: 신탁 방식이면서 사업이 진행 중인 가입자를 먼저 보여 줍니다. "
+    st.caption("우선순위: 신탁 방식이면서 전환 기한이 지났거나 임박한 가입자를 먼저 보여 줍니다. "
                "주소 표기가 비슷하기만 한 건은 '직원 확인'으로 분류해 사람이 최종 판단합니다.")
 
 with tab_notice:
@@ -88,12 +89,12 @@ with tab_notice:
                 st.write(f"- {col}: {z[col]}")
         st.write(f"- 현 추진사항: {z['현 추진사항']}")
         if z["규정 적용"] != "적용":
-            st.warning("소규모주택정비 등은 안내 내용의 규정 적용 여부를 공사가 확인한 뒤 발송합니다.")
+            st.warning("이 사업은 규정의 재건축등에 명시되어 있지 않아 공사가 적용 여부를 확인한 뒤 발송합니다.")
         if b["매칭 신뢰도"] == "직원 확인":
             st.warning("주소가 비슷하기만 해 직원 확인 후 발송합니다.")
 
     with right:
-        acts = actions_for(z["단계"], m["담보방식"])
+        acts = actions_for(z["단계"], m["담보방식"], b["기한"] if pd.notna(b["기한"]) else None)
         text = notice_text(m, z, acts)
         st.subheader("안내문 미리보기")
         st.html(notice_html(text))
@@ -112,14 +113,18 @@ with tab_notice:
 with tab_zones:
     counts = zones["단계"].value_counts().reindex(STAGES).fillna(0).astype(int)
     st.bar_chart(counts)
-    st.dataframe(zones[["구역명", "유형", "단계", "위치", "조합설립인가", "사업시행인가", "관리처분계획인가", "착공", "현 추진사항"]],
+    st.dataframe(zones[["구역명", "유형", "규정 적용", "단계", "위치", "조합설립인가", "사업시행인가", "관리처분계획인가", "착공", "현 추진사항"]],
                  hide_index=True, width="stretch", height=480)
 
 with tab_rules:
     st.write("판단은 이 규칙표가 하고, 안내문은 규칙표가 고른 내용만 씁니다.")
+    st.subheader("저당권 전환 기한")
+    st.table(pd.DataFrame(DEADLINE_RULES, columns=["사업", "이때까지 전환"]).style.hide(axis="index"))
+    st.caption("근거: 공사 「주택연금 설명서(신탁방식)」(2026.6.1). 참여 없이 이사할 때의 담보주택 변경 기한도 비슷합니다.")
+    st.subheader("사업 단계별 안내 (기한이 관리처분계획인가 전인 경우)")
     rows = []
     for stage in STAGES:
         for collateral in ("신탁", "저당"):
-            for a in actions_for(stage, collateral):
+            for a in actions_for(stage, collateral, "관리처분인가"):
                 rows.append({"사업 단계": stage, "담보 방식": collateral, "안내": a.title, "근거": a.source})
     st.table(pd.DataFrame(rows).style.hide(axis="index"))
